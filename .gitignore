@@ -1,0 +1,4 @@
+logs/
+reports/
+.env
+git_token.txt

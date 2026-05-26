@@ -1,0 +1,6 @@
+openpyxl
+playwright
+python-dotenv
+Pillow
+firebase-admin
+pandas
