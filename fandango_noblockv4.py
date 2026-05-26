@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 import random
 from dotenv import load_dotenv
-import pandas as pd
 load_dotenv()
 
 import firebase_admin
@@ -662,10 +661,6 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
 if __name__ == "__main__":
     PIPELINE_START_TIME = time.time()
 
-    import sys
-    # ✨ SETUP STEALTH FILE LOGGER (No Terminal Output) -> CHANGED TO STDOUT FOR GITHUB ACTIONS
-    
-    # Use StreamHandler instead of FileHandler
     print(f"🚀 MULTI-THREAD PIPELINE STARTED | Workers: {MAX_WORKERS}")
 
     if not os.path.exists(MAPPING_FILE):
@@ -740,7 +735,7 @@ if __name__ == "__main__":
         print("\n🛑 Pipeline interrupted by user. Saving partial progress...")
 
     # =========================================================================
-    # ── 3.5 RETRY PHASE FOR MAP ERRORS & MISSING SHOWS ───────────────────────
+    # ── 3.5 FIREBASE SETUP & FETCHING PREVIOUS RUN (Replaces Excel logic) ────
     # =========================================================================
     
     firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
@@ -759,11 +754,14 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"❌ Failed to initialize Firebase: {e}")
 
-    previous_shows_data = []
+    previous_shows_data = []  # Specifically for OVERWRITE_SNAPSHOT baseline tracking
     last_updated_str = "First Run"
     
+    recent_shows_data = []    # This replaces the Excel read. This is the run directly before this one.
+    recent_shows_timestamp = None
+
     if firebase_initialized:
-        print("\n📡 Fetching previous snapshot from Firebase for momentum tracking...")
+        print("\n📡 Fetching previous snapshot from Firebase for momentum tracking (last_snapshot)...")
         try:
             snap_ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/last_snapshot")
             snapshot_data = snap_ref.get()
@@ -782,61 +780,23 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️ Failed to fetch previous snapshot from Firebase: {e}")
 
-    recent_shows_data = []
-    
-    # Target latest_report.xlsx first since the script hasn't renamed it to previous_report.xlsx yet
-    recent_excel_file = "latest_report.xlsx"
-    if not os.path.exists(recent_excel_file):
-        recent_excel_file = "previous_report.xlsx"
-        
-    print(f"\n📡 Fetching recent shows from {recent_excel_file} for Missing Shows detection (Retry Phase)...")
-    if os.path.exists(recent_excel_file):
+        print("\n📡 Fetching previous run data from Firebase (master_shows_data) for Missing Shows detection...")
         try:
-            df = pd.read_excel(recent_excel_file, sheet_name="Showtime Details")
-            
-            for index, row in df.iterrows():
-                state_val = str(row.get('State', '')).strip()
-                if state_val.upper() == 'EXTRA':
-                    continue
-                
-                t_name = str(row.get('Theater Name', 'Unknown')).strip()
-                
-                # 🚨 FIX: Try getting Theater ID directly from the Excel column first
-                t_id_raw = str(row.get('Theater ID', '')).strip()
-                t_id = t_id_raw if t_id_raw and t_id_raw.lower() != 'nan' else ""
-                
-                # 🚨 FIX: Reverse-lookup fallback from master_map if Excel column is missing/empty
-                if not t_id and state_val in master_map:
-                    for t in master_map[state_val]:
-                        if t.get('theaterName', '').strip() == t_name:
-                            t_id = t.get('theaterId')
-                            break
-                            
-                recent_show = {
-                    'state': state_val,
-                    't_id': t_id,
-                    'theater': t_name,
-                    'time': str(row.get('Show Time', 'Unknown')),
-                    'format': str(row.get('Format', 'Standard')),
-                    'language': str(row.get('Language', 'Unknown')),
-                    'status': str(row.get('Status', 'Unknown')),
-                    'total': int(row.get('Tickets', 0)) if pd.notna(row.get('Tickets')) else 0,
-                    'booked': int(row.get('Booked', 0)) if pd.notna(row.get('Booked')) else 0,
-                    'gross': float(row.get('Gross ($)', 0.0)) if pd.notna(row.get('Gross ($)')) else 0.0,
-                    'price_str': str(row.get('Ticket Price', '$0.00')),
-                    'seat_map_urls': str(row.get('Seat Map URL', '')),
-                }
-                
-                # Only append if we successfully found the Theater ID, otherwise cross-referencing breaks
-                if t_id:
-                    recent_shows_data.append(recent_show)
-                
-            print(f"📈 Loaded recent shows from {recent_excel_file} for retry cross-referencing.")
+            master_ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/master_shows_data")
+            master_data = master_ref.get()
+            if master_data and "data" in master_data:
+                recent_shows_data = master_data["data"]
+                recent_shows_timestamp = master_data.get("last_updated", datetime.utcnow().isoformat() + "Z")
+                print(f"📈 Loaded {len(recent_shows_data)} recent shows directly from Firebase (master_shows_data).")
+            else:
+                print("ℹ️ No master_shows_data found in Firebase. Skipping Missing Shows check.")
         except Exception as e:
-            print(f"⚠️ Failed to fetch recent shows from {recent_excel_file}: {e}")
-    else:
-        print(f"ℹ️ No {recent_excel_file} found locally.")
+            print(f"⚠️ Failed to fetch master_shows_data from Firebase: {e}")
 
+
+    # =========================================================================
+    # ── 3.6 RETRY PHASE FOR MAP ERRORS & MISSING SHOWS ───────────────────────
+    # =========================================================================
     print("\n🔍 Analyzing current run against recent run to identify Map Errors and Missing Shows...")
     retry_t_ids = set()
     
@@ -951,9 +911,8 @@ if __name__ == "__main__":
         for missing in missing_shows_from_recent:
             show_key = f"{missing['t_id']}_{missing['time']}"
             if show_key not in successful_retries and not any(f"{mso['t_id']}_{mso['time']}" == show_key for mso in master_sold_out_queue):
-                raw_url = missing.get('seat_map_urls', '')
-                url_str = str(raw_url) if pd.notna(raw_url) else ""
-                url_log = f" URL(s): {url_str}" if url_str and url_str.strip() and url_str.strip().lower() != 'nan' else ""
+                url_str = missing.get('seat_map_urls', '')
+                url_log = f" URL(s): {url_str}" if url_str else ""
                 
                 print(f"   => ❌ Missing show still missing after retry: {missing['theater']} at {missing['time']}. Ignoring.{url_log}")
                 fmt = missing.get('format', 'Standard')
@@ -1024,11 +983,8 @@ if __name__ == "__main__":
     # =========================================================================
     # ── 4.5 MANUAL SHOWS PROCESSING ──────────────────────────────────────────
     # =========================================================================
-    manual_notes_text = None
     if MANUAL_SHOWS:
         print(f"\n➕ Processing {len(MANUAL_SHOWS)} Manual/Fan/Extra Shows...")
-        manual_log_lines = []
-        
         for ms in MANUAL_SHOWS:
             try:
                 st = str(ms[0]) if len(ms) > 0 and ms[0] is not None else ""
@@ -1046,9 +1002,7 @@ if __name__ == "__main__":
                         'is_extra': True # Special flag to hide from all detailed reports
                     })
                     
-                    log_msg = f"( EXTRA ) {EXTRA_GROSS_NOTE}."
                     print(f"   => ✅ Added: ( EXTRA ) {EXTRA_GROSS_NOTE}: {b_seats} Tickets | ${b_gross:,.2f}")
-                    manual_log_lines.append(log_msg)
                     continue
 
                 # --- STANDARD MANUAL SHOW HANDLER ---
@@ -1086,13 +1040,9 @@ if __name__ == "__main__":
                 master_summary_data[t_id]['booked'] += b_seats
                 master_summary_data[t_id]['gross'] += b_gross
                 
-                log_msg = f"( {st} ) {t_name} - {time_str} [{fmt}] - {b_seats}/{t_seats} Booked | ${b_gross:,.2f}"
-                print(f"   => ✅ Added: {log_msg}")
-                manual_log_lines.append(log_msg)
+                print(f"   => ✅ Added: ( {st} ) {t_name} - {time_str} [{fmt}] - {b_seats}/{t_seats} Booked | ${b_gross:,.2f}")
             except Exception as e:
                 print(f"   => ❌ Error processing manual show {ms}: {e}")
-                
-        manual_notes_text = "\n".join(manual_log_lines)
 
     # =========================================================================
     # ── 4.6 DYNAMIC MULTI-TIER DATA CONSOLIDATION (GENERIC MERGE) ────────────
@@ -1107,10 +1057,8 @@ if __name__ == "__main__":
         target_theaters_lower = [str(tid).strip().lower() for tid in MANUAL_MERGE_SHOWS_THEATRES]
         
         for row in master_shows_data:
-            # Safely grab the current theater ID and normalize it
             current_t_id = str(row.get('t_id', '')).strip()
             
-            # Case-insensitive check against our watch list
             if current_t_id.lower() not in target_theaters_lower:
                 cleaned_shows_list.append(row)
                 continue
@@ -1119,18 +1067,14 @@ if __name__ == "__main__":
             merge_composite_key = f"{current_t_id}_{show_time}"
             
             if merge_composite_key not in global_merger_registry:
-                # First time seeing this showtime for this specific theater, hold it as the baseline map
                 global_merger_registry[merge_composite_key] = row
             else:
-                # Split map detected! Consolidate data metrics into the baseline row
                 baseline_row = global_merger_registry[merge_composite_key]
                 
-                # 1. Accumulate mathematical metrics
                 baseline_row['total'] += row.get('total', 0)
                 baseline_row['booked'] += row.get('booked', 0)
                 baseline_row['gross'] += row.get('gross', 0.0)
                 
-                # 2. Integrate layout strings clearly without repeating formats/prices (Case-insensitive check)
                 current_fmt = str(row.get('format', '')).strip()
                 if current_fmt and current_fmt.lower() not in str(baseline_row['format']).lower():
                     baseline_row['format'] = f"{baseline_row['format']} / {current_fmt}"
@@ -1139,24 +1083,19 @@ if __name__ == "__main__":
                 if current_price and current_price.lower() not in str(baseline_row['price_str']).lower():
                     baseline_row['price_str'] = f"{baseline_row['price_str']} / {current_price}"
                 
-                # 3. Re-evaluate live room availability status based on integrated figures
                 if baseline_row['booked'] >= baseline_row['total'] and baseline_row['total'] > 0:
                     baseline_row['status'] = "Sold Out"
                 else:
                     baseline_row['status'] = "Available"
                 
-                # 4. Correct metrics in master_summary_data to keep aggregate sheets in perfect sync
-                # Note: We use the original exact-case current_t_id to find it in the summary dictionary
                 if current_t_id in master_summary_data:
                     master_summary_data[current_t_id]['shows'] -= 1
                 
                 print(f"   => Successfully consolidated duplicate split map for {current_t_id} at {show_time}")
         
-        # Flush the successfully consolidated rows back into our clean master data stream
         for merged_row in global_merger_registry.values():
             cleaned_shows_list.append(merged_row)
             
-        # Re-assign the primary data stream pointer to our clean dataset
         master_shows_data = cleaned_shows_list
 
     # =========================================================================
@@ -1185,7 +1124,7 @@ if __name__ == "__main__":
                 print(log)
             print("=====================================================================\n")
 
-        # Combine Momentum Notes (This intentionally stays tied to the snapshot)
+        # Combine Momentum Notes (Tied to last_snapshot)
         momentum_msg = ""
         diff_gross = 0.0
         if previous_shows_data:
@@ -1204,9 +1143,10 @@ if __name__ == "__main__":
             print(f"\n{momentum_msg}\n")
 
 
-        # --- FIREBASE UPLOAD MASTER DATA & SNAPSHOT ---
+        # --- FIREBASE UPLOAD PIPELINE ---
         if firebase_initialized:
-            # 1. Update the Snapshot if requested
+            
+            # 1. Update the Snapshot if requested (Baseline Tracking)
             if OVERWRITE_SNAPSHOT:
                 try:
                     print("💾 Saving current data as the new snapshot to Firebase...")
@@ -1221,42 +1161,22 @@ if __name__ == "__main__":
             else:
                 print(f"⏭️ Skipping snapshot save (OVERWRITE_SNAPSHOT is set to False).")
 
-            # 1.5 Upload the Previous Run Data
+            # 2. Save the PREVIOUS Run Data (Using data fetched at the start of the script)
             if recent_shows_data:
                 try:
                     print("💾 Saving previous run data to Firebase (previous_run_snapshot)...")
-                    
-                    # Determine correct timestamp for the previous run
-                    prev_timestamp = None
-                    try:
-                        history_ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/history")
-                        last_history = history_ref.order_by_key().limit_to_last(1).get()
-                        if last_history:
-                            for key, val in last_history.items():
-                                prev_timestamp = val.get("timestamp")
-                    except Exception as e:
-                        print(f"⚠️ Could not fetch previous run timestamp from history: {e}")
-                        
-                    if not prev_timestamp:
-                        # Fallback to file modification time if Firebase history fails or is empty
-                        if os.path.exists(recent_excel_file):
-                            mtime = os.path.getmtime(recent_excel_file)
-                            prev_timestamp = datetime.utcfromtimestamp(mtime).isoformat() + "Z"
-                        else:
-                            prev_timestamp = datetime.utcnow().isoformat() + "Z"
-
                     prev_run_ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/previous_run_snapshot")
                     prev_run_ref.set({
-                        "timestamp": prev_timestamp,
+                        "timestamp": recent_shows_timestamp,
                         "data": recent_shows_data
                     })
-                    print(f"✅ Successfully uploaded previous_run_snapshot to Firebase (Timestamp: {prev_timestamp})!")
+                    print(f"✅ Successfully uploaded previous_run_snapshot to Firebase (Timestamp: {recent_shows_timestamp})!")
                 except Exception as e:
                     print(f"⚠️ Failed to upload previous_run_snapshot to Firebase: {e}")
             else:
                 print("ℹ️ No previous run data available to upload.")
 
-            # 2. Upload the Master Data
+            # 3. Save the CURRENT Run Data
             try:
                 print(f"Connecting to Firebase Database: {firebase_db_url}")
                 ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/master_shows_data")
@@ -1273,17 +1193,15 @@ if __name__ == "__main__":
                 ref.set(payload)
                 
                 print("✅ Successfully uploaded master_shows_data to Firebase!")
-                
             except Exception as e:
                 print(f"❌ Failed to upload to Firebase: {e}")
                 traceback.print_exc()
 
-            # 3. Append to History
+            # 4. Append to History
             try:
                 print("💾 Appending current run to history in Firebase...")
                 history_ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/history")
                 
-                # Compute metrics for history
                 calc_shows = [r for r in master_shows_data if not r.get('is_extra')]
                 venues_count = len(set(r.get('t_id') for r in calc_shows))
                 shows_count = len(calc_shows)
@@ -1308,46 +1226,9 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"⚠️ Failed to append history to Firebase: {e}")
 
-        print("\n🎨 Generating Visual Box Office Report...")
-        try:
-            from generateFandangoImageReport import generate_fandango_image_report
-            report_filename = "latest_report.png"
-            generate_fandango_image_report(
-                data=master_shows_data,
-                filename=report_filename,
-                movie_name=MOVIE_TITLE,
-                show_date=SHOW_DATE,
-                previous_shows_data=previous_shows_data,
-                last_updated_str=last_updated_str
-            )
-        except Exception as e:
-            print(f"❌ Failed to generate image report: {e}")
-            traceback.print_exc()
-
-        print("\n📊 Generating Excel Report...")
-        try:
-            old_excel = "previous_report.xlsx"
-            current_excel = "latest_report.xlsx"
-
-            if os.path.exists(old_excel):
-                os.remove(old_excel)
-            if os.path.exists(current_excel):
-                os.rename(current_excel, old_excel)
-
-            from generateFandangoExcelReport import export_master_excel
-            export_master_excel(
-                data=master_shows_data,
-                base_filename="latest_report",
-                previous_shows_data=previous_shows_data,
-                last_updated_str=last_updated_str
-            )
-        except Exception as e:
-            print(f"❌ Failed to generate excel report: {e}")
-            traceback.print_exc()
-
         pipeline_elapsed = time.time() - PIPELINE_START_TIME
         mins, secs = divmod(pipeline_elapsed, 60)
-        print(f"🎉 Pipeline completely finished in {int(mins)} minutes and {int(secs)} seconds!")
+        print(f"🎉 Pipeline completely finished in {int(mins)} minutes and {int(secs)} seconds. No local files saved!")
 
     else:
         print("❌ No successful showtime seat maps were fetched across any state.")
