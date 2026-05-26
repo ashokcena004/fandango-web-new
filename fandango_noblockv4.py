@@ -999,7 +999,8 @@ if __name__ == "__main__":
                         'format': 'EXTRA', 'language': 'EXTRA', 'time': '', 'status': 'EXTRA',
                         'price_str': '', 'total': b_seats, # Match total to booked so Occupancy is preserved
                         'booked': b_seats, 'gross': b_gross,
-                        'is_extra': True # Special flag to hide from all detailed reports
+                        'is_extra': True, # Special flag to hide from all detailed reports
+                        'seat_map_urls': "" # Explicitly empty for uniform schema
                     })
                     
                     print(f"   => ✅ Added: ( EXTRA ) {EXTRA_GROSS_NOTE}: {b_seats} Tickets | ${b_gross:,.2f}")
@@ -1029,7 +1030,8 @@ if __name__ == "__main__":
                     'state': st, 't_id': t_id, 'theater': t_name,
                     'format': fmt, 'language': 'Unknown', 'time': time_str, 'status': status,
                     'price_str': price_str, 'total': t_seats,
-                    'booked': b_seats, 'gross': b_gross
+                    'booked': b_seats, 'gross': b_gross,
+                    'seat_map_urls': "" # Explicitly empty for uniform schema
                 })
 
                 if t_id not in master_summary_data:
