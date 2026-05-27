@@ -107,7 +107,7 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                 task_idx, target_state, t = task_queue.get_nowait()
             except queue.Empty:
                 break
-            time.sleep(random.uniform(0.2, 0.5))    
+            time.sleep(random.uniform(0.2, 0.3))    
             t_name = t.get('theaterName', 'Unknown')
             t_id = t.get('theaterId')
             if not t_id: continue
