@@ -952,15 +952,15 @@ if __name__ == "__main__":
                 
                 print(f"   => ✅ Recovered {item['theater']} [{fmt}] at {item['time']} via Cross-Reference.")
             else:
-                combined_total = FALLBACK_SEATS
-                combined_booked = FALLBACK_SEATS
+                combined_total = 0 #FALLBACK_SEATS
+                combined_booked = 0 #FALLBACK_SEATS
                 
                 est_price = AVG_PRICE
                 if PRICE_TAX_CUT and est_price > 0:
                     est_price = float((est_price // 5) * 5)
                     
-                combined_gross = FALLBACK_SEATS * est_price
-                price_str = f"${est_price:.2f}"
+                combined_gross = 0 #FALLBACK_SEATS * est_price
+                price_str = 0 #f"${est_price:.2f}"
                 
                 log_entry = f"( {item['state']} ) {item['theater']} - {item['time']} [{fmt}] - Added ${combined_gross:,.2f}"
                 blind_fallback_log.append(log_entry)
