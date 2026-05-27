@@ -44,7 +44,7 @@ PREFER_PHYSICAL_SCREENS = []
 MANUAL_MERGE_SHOWS_THEATRES = ["AAILI"]
 
 # 🚨 FALLBACK & PRICING CONFIGURATION
-AVG_PRICE = 41.00
+AVG_PRICE = 35.00
 MAX_TIER_PRICE = 41.00 #XD D-Box Pricing
 FALLBACK_SEATS = 100
 PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple of 5 (e.g., $29 -> $25)
