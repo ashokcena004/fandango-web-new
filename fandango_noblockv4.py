@@ -43,6 +43,10 @@ PREFER_PHYSICAL_SCREENS = []
 # This will surgically combine their seat capacities, tickets sold, and financial gross post-scrape.
 MANUAL_MERGE_SHOWS_THEATRES = ["AAILI"]
 
+# 🚫 IGNORE SOLD OUT SHOWS FOR SPECIFIC CHAINS
+# If a show at these chains is "Sold Out", its tickets and gross will be zeroed out.
+IGNORE_SOLDOUT_CHAINS = ["AMC"]
+
 # 🚨 FALLBACK & PRICING CONFIGURATION
 AVG_PRICE = 35.00
 MAX_TIER_PRICE = 41.00 #XD D-Box Pricing
@@ -1101,6 +1105,38 @@ if __name__ == "__main__":
         master_shows_data = cleaned_shows_list
 
     # =========================================================================
+    # ── 4.7 CHAIN-SPECIFIC SOLD OUT IGNORER ──────────────────────────────────
+    # =========================================================================
+    ignored_soldout_chain_log = []
+    if IGNORE_SOLDOUT_CHAINS:
+        print(f"\n🚫 Applying Sold Out filter for chains: {', '.join(IGNORE_SOLDOUT_CHAINS)}...")
+        
+        for show in master_shows_data:
+            if show.get('status') == 'Sold Out':
+                t_name_lower = show.get('theater', '').lower()
+                
+                # Check if theater matches any of the ignored chains
+                if any(chain.lower() in t_name_lower for chain in IGNORE_SOLDOUT_CHAINS):
+                    # Record the log before we wipe the data
+                    log_msg = f"( {show['state']} ) {show['theater']} - {show['time']} [{show['format']}] | Removed: {show['booked']} tickets, ${show['gross']:,.2f}"
+                    ignored_soldout_chain_log.append(log_msg)
+                    
+                    t_id = show['t_id']
+                    
+                    # Deduct from master summary to keep the overall math perfectly balanced
+                    if t_id in master_summary_data:
+                        master_summary_data[t_id]['total'] -= show['total']
+                        master_summary_data[t_id]['booked'] -= show['booked']
+                        master_summary_data[t_id]['gross'] -= show['gross']
+                        
+                    # Zero out the show data (but keep it in the array so the shows count remains)
+                    show['total'] = 0
+                    show['booked'] = 0
+                    show['gross'] = 0.0
+                    show['price_str'] = "$0.00"
+                    show['status'] = "Sold Out (Ignored)"
+
+    # =========================================================================
     # ── 5. UPLOAD TO FIREBASE & MOMENTUM TRACKING ────────────────────────────
     # =========================================================================
     if master_shows_data:
@@ -1113,6 +1149,16 @@ if __name__ == "__main__":
             print(f"shows to cross-reference. We forced {FALLBACK_SEATS} seats @ ${AVG_PRICE:.2f}.")
             print("=====================================================================")
             for log in blind_fallback_log:
+                print(log)
+            print("=====================================================================\n")
+        
+        if ignored_soldout_chain_log:
+            print("\n=====================================================================")
+            print("🚫 IGNORED SOLD OUT SHOWS (Specific Chains)")
+            print(f"The following Sold Out shows belonged to: {', '.join(IGNORE_SOLDOUT_CHAINS)}")
+            print("Their Gross and Tickets have been reverted to 0.")
+            print("=====================================================================")
+            for log in ignored_soldout_chain_log:
                 print(log)
             print("=====================================================================\n")
             
