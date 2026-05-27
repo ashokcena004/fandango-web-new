@@ -965,7 +965,7 @@ if __name__ == "__main__":
                 log_entry = f"( {item['state']} ) {item['theater']} - {item['time']} [{fmt}] - Added ${combined_gross:,.2f}"
                 blind_fallback_log.append(log_entry)
                 
-                print(f"   => ⚠️ Blind Fallback used for {item['theater']} [{fmt}] at {item['time']}.")
+                print(f"   => ⚠️ Blind Fallback used for {item['theater']} [{fmt}] at {item['time']}. Please check this show and add gross/tickets manually!")
 
             master_shows_data.append({
                 'state': item['state'], 't_id': t_id, 'theater': item['theater'],
@@ -1109,7 +1109,7 @@ if __name__ == "__main__":
         if blind_fallback_log:
             print("\n=====================================================================")
             print("⚠️ BLIND FALLBACK LOG (Highly Inaccurate Estimates)")
-            print("The following shows were completely sold out and had no other open")
+            print("The following shows were completely sold out and had no other open. Please check these shows and add gross/tickets manually!")
             print(f"shows to cross-reference. We forced {FALLBACK_SEATS} seats @ ${AVG_PRICE:.2f}.")
             print("=====================================================================")
             for log in blind_fallback_log:
