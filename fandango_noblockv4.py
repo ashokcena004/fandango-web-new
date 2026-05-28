@@ -81,13 +81,16 @@ TARGET_STATES = [
 # ── WORKER FUNCTION ──────────────────────────────────────────────────────────
 # =============================================================================
 
-def process_theaters_worker(task_queue, thread_id, total_tasks):
+def process_theaters_worker(task_queue, thread_id, total_tasks, master_hash_cache=None):
+    if master_hash_cache is None: master_hash_cache = {}
+    
     # Local data stores to prevent thread racing conditions
     local_shows_data = []
     local_summary_data = {}
     local_knowledge_base = {} 
     local_sold_out_queue = []
     local_ignored_shows_log = []
+    local_hash_cache = {} # ✨ NEW: Stores the hashes learned in this thread
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
@@ -107,7 +110,7 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                 task_idx, target_state, t = task_queue.get_nowait()
             except queue.Empty:
                 break
-            time.sleep(random.uniform(0.2, 0.4))    
+            time.sleep(random.uniform(0.2, 0.35))    
             t_name = t.get('theaterName', 'Unknown')
             t_id = t.get('theaterId')
             if not t_id: continue
@@ -288,6 +291,53 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                     # 🚨 MATRIX SCENARIOS 9 & 10: ALL APIs FAILED
                     if len(valid_tiers) == 0:
                         has_generic_error = any(ft.get('status', '').lower() != 'soldout' for ft in failed_tiers)
+                        
+                        # ✨ HASH CACHE SELF-HEALING (All Tiers Failed)
+                        if len(failed_tiers) > 0 and not has_generic_error:
+                            all_cached = True
+                            c_total = 0
+                            c_booked = 0
+                            c_gross = 0.0
+                            c_prices = set()
+                            
+                            for ft in failed_tiers:
+                                h = ft.get('hash')
+                                if h in master_hash_cache:
+                                    cap = master_hash_cache[h]['capacity']
+                                    mgross = master_hash_cache[h]['max_gross']
+                                    c_total += cap
+                                    if ft.get('status', '').lower() == 'soldout':
+                                        c_booked += cap
+                                        c_gross += mgross
+                                        if cap > 0: c_prices.add(mgross / cap)
+                                else:
+                                    all_cached = False
+                                    break
+                                    
+                            if all_cached:
+                                final_format = " / ".join(sorted(list(set(ft['format'] for ft in failed_tiers))))
+                                final_language = " / ".join(sorted(list(set(ft.get('language', 'Unknown') for ft in failed_tiers))))
+                                failed_urls = [f"https://www.fandango.com/napi/seatMap/{ft.get('hash', '')}" for ft in failed_tiers if ft.get('hash')]
+                                urls_str = " | ".join(failed_urls)
+                                price_str = " / ".join(sorted([f"${p:.2f}" for p in c_prices])) if c_prices else "$0.00"
+                                final_status = "Sold Out" if c_booked >= c_total and c_total > 0 else "Available"
+
+                                local_shows_data.append({
+                                    'state': target_state, 't_id': t_id, 'theater': t_name, 
+                                    'format': final_format, 'language': final_language, 'time': show_time, 'status': final_status, 
+                                    'price_str': price_str, 'total': c_total, 
+                                    'booked': c_booked, 'gross': c_gross,
+                                    'seat_map_urls': urls_str
+                                })
+                                
+                                local_summary_data[t_id]['shows'] += 1
+                                local_summary_data[t_id]['total'] += c_total
+                                local_summary_data[t_id]['booked'] += c_booked
+                                local_summary_data[t_id]['gross'] += c_gross
+
+                                print(f"   => 🟢 SELF-HEALED (All-Failed) via Hash Cache: {t_name} at {show_time} [{final_format}]")
+                                continue # Bypass standard S9/S10 failure logic!
+                        
                         if has_generic_error:
                             # S10: Both APIs Fail + 'Available'
                             formats_seen = list(set(ft['format'] for ft in failed_tiers))
@@ -506,6 +556,7 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                             vt_true_cap = 0
                             vt_true_booked = 0
                             vt_gross = 0.0
+                            vt_max_gross = 0.0 # ✨ NEW: Used for learning hash capacities
                             vt_phys_total = 0
                             vt_raw_booked = 0
                             seats_to_remove = 0
@@ -530,6 +581,7 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                                     vt_true_cap += a_true_cap
                                     vt_true_booked += a_true_booked
                                     vt_gross += (a_true_booked * a_price)
+                                    vt_max_gross += (a_true_cap * a_price) # ✨ NEW
                                     if a_price > 0: prices_seen.add(a_price)
                             else:
                                 # EXCEPTION MODE: Abandon dots (due to under-drawn maps) & strictly use Cache Math
@@ -543,6 +595,7 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                                     vt_true_cap += a_true_cap
                                     vt_true_booked += a_true_booked
                                     vt_gross += (a_true_booked * a_price)
+                                    vt_max_gross += (a_true_cap * a_price) # ✨ NEW
                                     if a_price > 0: prices_seen.add(a_price)
 
                             # Master list override
@@ -550,10 +603,12 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                                 vt_true_cap = 0
                                 vt_true_booked = 0
                                 vt_gross = 0.0
+                                vt_max_gross = 0.0
                                 for a_id, ast in area_stats.items():
                                     vt_true_cap += ast['cache_cap']
                                     vt_true_booked += ast['cache_cap']
                                     vt_gross += (ast['cache_cap'] * ast['price'])
+                                    vt_max_gross += (ast['cache_cap'] * ast['price']) # ✨ NEW
 
                             vt['true_capacity'] = vt_true_cap
                             vt['true_booked'] = vt_true_booked
@@ -561,6 +616,15 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                             allocated_cap += vt_true_cap
                             allocated_booked += vt_true_booked
                             allocated_gross += vt_gross
+
+                            # ✨ HASH CACHE LEARNING PHASE ✨
+                            tier_hash = vt['tier_info'].get('hash')
+                            if tier_hash and vt_true_cap > 0:
+                                local_hash_cache[tier_hash] = {
+                                    'capacity': vt_true_cap,
+                                    'max_gross': vt_max_gross,
+                                    'format': vt['tier_info'].get('format', 'Standard')
+                                }
 
                         # --- Assess Global Statuses ---
                         all_tiers_info = [vt['tier_info'] for vt in cluster['tiers']] + cluster['failed_tiers']
@@ -590,32 +654,41 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                                 # WE HAVE FAILED TIERS
                                 missing_capacity = max(0, base_phys_total_dots - allocated_cap)
                                 
+                                combined_total = allocated_cap
+                                combined_booked = allocated_booked
+                                combined_gross = allocated_gross
+                                
                                 # 🚨 THE FIX: Check specifically if the crashed tiers are Sold Out or Available
                                 failed_tiers_soldout = all(ft.get('status', '').lower() == 'soldout' for ft in cluster['failed_tiers'])
                                 
-                                if failed_tiers_soldout:
-                                    # The crashed premium tier is definitively Sold Out. We force 100% booking.
-                                    missing_booked = missing_capacity
-                                    
-                                    combined_total = allocated_cap + missing_capacity
-                                    combined_booked = allocated_booked + missing_booked
-                                    
-                                    # Use safe_avg_price if EVERYTHING is sold out, else use MAX_TIER_PRICE for soldout tier to prevent underbilling as it's mostly high priced tier
-                                    price_to_use = safe_avg_price if not is_any_available else MAX_TIER_PRICE
-                                    
-                                    combined_gross = allocated_gross + (missing_booked * price_to_use)
-                                    if price_to_use > 0: prices_seen.add(price_to_use)
-                                    calc_method_log = "Matrix: Failed Tier Sold Out"
-                                    
-                                else:
-                                    # The crashed tier is Available! We DO NOT assume 100% booked.
-                                    missing_booked = 0
-                                    
-                                    combined_total = allocated_cap + missing_capacity
-                                    combined_booked = allocated_booked + missing_booked # Which equals just the working tier's bookings
-                                    
-                                    combined_gross = allocated_gross # $0 added for the missing seats since we assume 0 booked
-                                    calc_method_log = "Matrix: Failed Tier Available"
+                                # ✨ HASH CACHE INJECTION (Matrix Level) ✨
+                                for ft in cluster['failed_tiers']:
+                                    tier_hash = ft.get('hash')
+                                    is_soldout = ft.get('status', '').lower() == 'soldout'
+
+                                    if tier_hash in master_hash_cache:
+                                        c_cap = master_hash_cache[tier_hash]['capacity']
+                                        c_gross = master_hash_cache[tier_hash]['max_gross']
+
+                                        combined_total += c_cap
+                                        if is_soldout:
+                                            combined_booked += c_cap
+                                            combined_gross += c_gross
+                                            if c_cap > 0: prices_seen.add(c_gross / c_cap)
+                                            
+                                        missing_capacity = max(0, missing_capacity - c_cap)
+                                        calc_method_log = "Matrix: Hash Healed"
+                                    else:
+                                        # Use old fallback logic for THIS tier
+                                        combined_total += missing_capacity
+                                        if is_soldout:
+                                            missing_booked = missing_capacity
+                                            combined_booked += missing_booked
+                                            price_to_use = safe_avg_price if not is_any_available else MAX_TIER_PRICE
+                                            combined_gross += (missing_booked * price_to_use)
+                                            if price_to_use > 0: prices_seen.add(price_to_use)
+                                        missing_capacity = 0 # Consumed so next failed tier gets 0 if it's not in cache
+                                        calc_method_log = "Matrix: Math Fallback"
 
                         if combined_total > 0:
                             kb_key = f"{t_id}_{final_format}"
@@ -626,23 +699,23 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
                             for p in prices_seen: 
                                 if p > 0: local_knowledge_base[kb_key]['prices'].add(p)
 
-                            final_status = "Sold Out" if combined_booked == combined_total else "Available"
-                            price_str = " / ".join(sorted([f"${p:.2f}" for p in prices_seen])) if prices_seen else "$0.00"
-                            
-                            print(f"   => 📊 Seats: {combined_total:<3} | Booked: {combined_booked:<3} | Gross: ${combined_gross:<7.2f} [{calc_method_log}]")
-                            
-                            local_shows_data.append({
-                                'state': target_state, 't_id': t_id, 'theater': t_name, 
-                                'format': final_format, 'language': final_language, 'time': show_time, 'status': final_status, 
-                                'price_str': price_str, 'total': combined_total, 
-                                'booked': combined_booked, 'gross': combined_gross,
-                                'seat_map_urls': matrix_urls_str
-                            })
-                            
-                            local_summary_data[t_id]['shows'] += 1
-                            local_summary_data[t_id]['total'] += combined_total
-                            local_summary_data[t_id]['booked'] += combined_booked
-                            local_summary_data[t_id]['gross'] += combined_gross
+                        final_status = "Sold Out" if combined_booked >= combined_total and combined_total > 0 else "Available"
+                        price_str = " / ".join(sorted([f"${p:.2f}" for p in prices_seen])) if prices_seen else "$0.00"
+                        
+                        print(f"   => 📊 Seats: {combined_total:<3} | Booked: {combined_booked:<3} | Gross: ${combined_gross:<7.2f} [{calc_method_log}]")
+                        
+                        local_shows_data.append({
+                            'state': target_state, 't_id': t_id, 'theater': t_name, 
+                            'format': final_format, 'language': final_language, 'time': show_time, 'status': final_status, 
+                            'price_str': price_str, 'total': combined_total, 
+                            'booked': combined_booked, 'gross': combined_gross,
+                            'seat_map_urls': matrix_urls_str
+                        })
+                        
+                        local_summary_data[t_id]['shows'] += 1
+                        local_summary_data[t_id]['total'] += combined_total
+                        local_summary_data[t_id]['booked'] += combined_booked
+                        local_summary_data[t_id]['gross'] += combined_gross
 
                 except Exception as e:
                     print(f"[Thread-{thread_id}] EXCEPTION processing cluster at {show_time}: {e}")
@@ -655,7 +728,8 @@ def process_theaters_worker(task_queue, thread_id, total_tasks):
         "summary_data": local_summary_data,
         "knowledge_base": local_knowledge_base,
         "sold_out_queue": local_sold_out_queue,
-        "ignored_log": local_ignored_shows_log
+        "ignored_log": local_ignored_shows_log,
+        "hash_cache": local_hash_cache # ✨ NEW
     }
 
 # =============================================================================
@@ -699,45 +773,6 @@ if __name__ == "__main__":
     master_ignored_shows_log = []
     blind_fallback_log = []
 
-    # 3. EXECUTE THREAD POOL
-    try:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = [executor.submit(process_theaters_worker, tasks_queue, i+1, total_tasks) for i in range(MAX_WORKERS)]
-            
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    # Safely merge thread results into master lists
-                    master_shows_data.extend(result["shows_data"])
-                    master_sold_out_queue.extend(result["sold_out_queue"])
-                    master_ignored_shows_log.extend(result["ignored_log"])
-                    
-                    # Merge Summary Dictionaries
-                    for t_id, data in result["summary_data"].items():
-                        if t_id not in master_summary_data:
-                            master_summary_data[t_id] = data
-                        else:
-                            master_summary_data[t_id]['shows'] += data['shows']
-                            master_summary_data[t_id]['total'] += data['total']
-                            master_summary_data[t_id]['booked'] += data['booked']
-                            master_summary_data[t_id]['gross'] += data['gross']
-                            
-                    # Merge Knowledge Base Dictionaries
-                    for kb_key, kb_data in result["knowledge_base"].items():
-                        if kb_key not in master_knowledge_base:
-                            master_knowledge_base[kb_key] = kb_data
-                        else:
-                            master_knowledge_base[kb_key]['total_seats_sum'] += kb_data['total_seats_sum']
-                            master_knowledge_base[kb_key]['count'] += kb_data['count']
-                            master_knowledge_base[kb_key]['prices'].update(kb_data['prices'])
-                            
-                except Exception as e:
-                    print(f"❌ A thread encountered a fatal error: {e}")
-                    traceback.print_exc()
-                    
-    except KeyboardInterrupt:
-        print("\n🛑 Pipeline interrupted by user. Saving partial progress...")
-
     # =========================================================================
     # ── 3.5 FIREBASE SETUP & FETCHING PREVIOUS RUN (Replaces Excel logic) ────
     # =========================================================================
@@ -745,6 +780,8 @@ if __name__ == "__main__":
     firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
     firebase_db_url = os.environ.get("FIREBASE_DATABASE_URL")
     firebase_initialized = False
+    master_hash_cache = {} # ✨ NEW: Master Hash Database
+    new_hash_entries = {}  # ✨ NEW: Tracks hashes learned this run to upload
 
     if not firebase_creds_json or not firebase_db_url:
         print("⚠️ Firebase Credentials or Database URL missing from Environment Variables.")
@@ -755,6 +792,20 @@ if __name__ == "__main__":
                 cred = credentials.Certificate(creds_dict)
                 firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
             firebase_initialized = True
+            
+            # ✨ FETCH HASH CACHE ✨
+            print("📡 Fetching Global Hash Cache from Firebase...")
+            try:
+                hash_ref = db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/hash_capacity_cache")
+                cached_hashes = hash_ref.get()
+                if cached_hashes:
+                    master_hash_cache = cached_hashes
+                    print(f"📈 Loaded {len(master_hash_cache)} historical tier fingerprints.")
+                else:
+                    print("ℹ️ No historical hash cache found.")
+            except Exception as e:
+                print(f"⚠️ Failed to fetch hash cache: {e}")
+                
         except Exception as e:
             print(f"❌ Failed to initialize Firebase: {e}")
 
@@ -796,6 +847,54 @@ if __name__ == "__main__":
                 print("ℹ️ No master_shows_data found in Firebase. Skipping Missing Shows check.")
         except Exception as e:
             print(f"⚠️ Failed to fetch master_shows_data from Firebase: {e}")
+
+
+    # 3. EXECUTE THREAD POOL
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # ✨ PASS HASH CACHE TO WORKER
+            futures = [executor.submit(process_theaters_worker, tasks_queue, i+1, total_tasks, master_hash_cache) for i in range(MAX_WORKERS)]
+            
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    # Safely merge thread results into master lists
+                    master_shows_data.extend(result["shows_data"])
+                    master_sold_out_queue.extend(result["sold_out_queue"])
+                    master_ignored_shows_log.extend(result["ignored_log"])
+                    
+                    # Merge Summary Dictionaries
+                    for t_id, data in result["summary_data"].items():
+                        if t_id not in master_summary_data:
+                            master_summary_data[t_id] = data
+                        else:
+                            master_summary_data[t_id]['shows'] += data['shows']
+                            master_summary_data[t_id]['total'] += data['total']
+                            master_summary_data[t_id]['booked'] += data['booked']
+                            master_summary_data[t_id]['gross'] += data['gross']
+                            
+                    # Merge Knowledge Base Dictionaries
+                    for kb_key, kb_data in result["knowledge_base"].items():
+                        if kb_key not in master_knowledge_base:
+                            master_knowledge_base[kb_key] = kb_data
+                        else:
+                            master_knowledge_base[kb_key]['total_seats_sum'] += kb_data['total_seats_sum']
+                            master_knowledge_base[kb_key]['count'] += kb_data['count']
+                            master_knowledge_base[kb_key]['prices'].update(kb_data['prices'])
+                            
+                    # ✨ MERGE LEARNED HASHES
+                    if "hash_cache" in result:
+                        for h_key, h_data in result["hash_cache"].items():
+                            if h_key not in master_hash_cache:
+                                master_hash_cache[h_key] = h_data
+                                new_hash_entries[h_key] = h_data
+                            
+                except Exception as e:
+                    print(f"❌ A thread encountered a fatal error: {e}")
+                    traceback.print_exc()
+                    
+    except KeyboardInterrupt:
+        print("\n🛑 Pipeline interrupted by user. Saving partial progress...")
 
 
     # =========================================================================
@@ -846,12 +945,20 @@ if __name__ == "__main__":
         
         try:
             with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_retry_tasks)) as executor:
-                futures = [executor.submit(process_theaters_worker, retry_queue, f"RETRY-{i+1}", total_retry_tasks) for i in range(min(MAX_WORKERS, total_retry_tasks))]
+                # ✨ PASS HASH CACHE TO RETRY WORKER
+                futures = [executor.submit(process_theaters_worker, retry_queue, f"RETRY-{i+1}", total_retry_tasks, master_hash_cache) for i in range(min(MAX_WORKERS, total_retry_tasks))]
                 for future in as_completed(futures):
                     try:
                         result = future.result()
                         retry_shows_data.extend(result["shows_data"])
                         retry_sold_out_queue.extend(result["sold_out_queue"])
+                        
+                        # ✨ MERGE LEARNED HASHES (Retry Phase)
+                        if "hash_cache" in result:
+                            for h_key, h_data in result["hash_cache"].items():
+                                if h_key not in master_hash_cache:
+                                    master_hash_cache[h_key] = h_data
+                                    new_hash_entries[h_key] = h_data
                     except Exception as e:
                         print(f"❌ A retry thread encountered a fatal error: {e}")
         except KeyboardInterrupt:
@@ -1194,6 +1301,15 @@ if __name__ == "__main__":
         # --- FIREBASE UPLOAD PIPELINE ---
         if firebase_initialized:
             
+            # ✨ 0. PUSH NEW HASHES TO FIREBASE ✨
+            if new_hash_entries:
+                try:
+                    print(f"💾 Saving {len(new_hash_entries)} newly learned Hash Blueprints to Firebase...")
+                    db.reference(f"movies/{MOVIE_SLUG}/{SHOW_DATE}/hash_capacity_cache").update(new_hash_entries)
+                    print("✅ Hash Cache updated successfully.")
+                except Exception as e:
+                    print(f"⚠️ Failed to update Hash Cache: {e}")
+
             # 1. Update the Snapshot if requested (Baseline Tracking)
             if OVERWRITE_SNAPSHOT:
                 try:
