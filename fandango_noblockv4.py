@@ -55,10 +55,14 @@ PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple 
 OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front row 'R' seats as blocks
 
 # 📝 MANUAL SHOWS OVERRIDE (Fan Shows / Missing API Data)
-# Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage]
+# Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
 # For EXTRA: ["EXTRA", "", "", Booked_Gross, 0, Booked_Tickets]
 MANUAL_SHOWS = [
-    ["EXTRA", "", "", 4000.0, 0, 134]
+    ["EXTRA", "", "", 5300.0, 0, 175],
+    # Example of a fully detailed manual normal show:
+    # ["CA", "AABCD", "7:00 PM", 1500.0, 3000.0, 75, 150, 0.50, "IMAX", "Telugu"]
+    ["IL", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Standard", "Telugu"],
+    ["IL", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Standard", "Telugu"],
 ]
 
 EXTRA_GROSS_NOTE = "Added extra gross for Apple cinemas and (Charlotte) Regal Stonecrest at Piper Glen - 6:30PM show which has been removed from Fandango"
@@ -1126,6 +1130,10 @@ if __name__ == "__main__":
                 t_seats = int(ms[6]) if len(ms) > 6 and ms[6] is not None else 0
                 occ = float(ms[7]) if len(ms) > 7 and ms[7] is not None else 0.0
                 
+                # ✨ NEW: Extract Format and Language if provided, otherwise use defaults
+                fmt = str(ms[8]) if len(ms) > 8 and ms[8] else "Fan Event / Manual"
+                lang = str(ms[9]) if len(ms) > 9 and ms[9] else "Unknown"
+                
                 t_name = "Unknown Theater"
                 if st in master_map:
                     for t in master_map[st]:
@@ -1133,13 +1141,13 @@ if __name__ == "__main__":
                             t_name = t.get('theaterName', 'Unknown')
                             break
                             
-                fmt = "Fan Event / Manual"
                 price_str = f"${(b_gross / b_seats):.2f}" if b_seats > 0 else "$0.00"
-                status = "Sold Out" if b_seats >= t_seats else "Available"
+                # Safe status calculation identical to main matrix logic
+                status = "Sold Out" if b_seats >= t_seats and t_seats > 0 else "Available"
                 
                 master_shows_data.append({
                     'state': st, 't_id': t_id, 'theater': t_name,
-                    'format': fmt, 'language': 'Unknown', 'time': time_str, 'status': status,
+                    'format': fmt, 'language': lang, 'time': time_str, 'status': status,
                     'price_str': price_str, 'total': t_seats,
                     'booked': b_seats, 'gross': b_gross,
                     'seat_map_urls': "" # Explicitly empty for uniform schema
@@ -1153,7 +1161,7 @@ if __name__ == "__main__":
                 master_summary_data[t_id]['booked'] += b_seats
                 master_summary_data[t_id]['gross'] += b_gross
                 
-                print(f"   => ✅ Added: ( {st} ) {t_name} - {time_str} [{fmt}] - {b_seats}/{t_seats} Booked | ${b_gross:,.2f}")
+                print(f"   => ✅ Added: ( {st} ) {t_name} - {time_str} [{fmt} | {lang}] - {b_seats}/{t_seats} Booked | ${b_gross:,.2f}")
             except Exception as e:
                 print(f"   => ❌ Error processing manual show {ms}: {e}")
 
