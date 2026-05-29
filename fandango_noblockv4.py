@@ -902,144 +902,33 @@ if __name__ == "__main__":
 
 
     # =========================================================================
-    # ── 3.6 RETRY PHASE FOR MAP ERRORS & MISSING SHOWS ───────────────────────
+    # ── 3.6 PREVIOUS RUN COMPARISON ONLY (NO RECOVERY) ───────────────────────
     # =========================================================================
-    print("\n🔍 Analyzing current run against recent run to identify Map Errors and Missing Shows...")
-    retry_t_ids = set()
-    
-    for show in master_shows_data:
-        if show.get('status') == "Available (Map Error)":
-            retry_t_ids.add(show['t_id'])
-            
-    current_shows_set = {f"{s['t_id']}_{s['time']}" for s in master_shows_data}
-    missing_shows_from_recent = []
-    
+
+    print("\n🔍 Comparing against previous run for reporting only...")
+
+    current_shows_set = {
+        f"{s['t_id']}_{s['time']}"
+        for s in master_shows_data
+    }
+
+    missing_shows_count = 0
+
     if recent_shows_data:
         for prev_show in recent_shows_data:
-            if prev_show.get('is_extra'): continue
+
+            if prev_show.get("is_extra"):
+                continue
+
             show_key = f"{prev_show['t_id']}_{prev_show['time']}"
+
             if show_key not in current_shows_set:
-                missing_shows_from_recent.append(prev_show)
-                retry_t_ids.add(prev_show['t_id'])
-                
-    if retry_t_ids:
-        print(f"🔄 RETRY PHASE: Found {len(retry_t_ids)} theaters with Map Errors or Missing Shows. Initiating retry...")
-        retry_queue = queue.Queue()
-        retry_task_counter = 1
-        
-        t_id_to_theater_info = {}
-        for state, theaters in master_map.items():
-            for t in theaters:
-                t_id_to_theater_info[t['theaterId']] = (state, t)
-                
-        for t_id in retry_t_ids:
-            if t_id in t_id_to_theater_info:
-                state, t_info = t_id_to_theater_info[t_id]
-                retry_queue.put((retry_task_counter, state, t_info))
-                retry_task_counter += 1
-            else:
-                prev_show_match = next((s for s in missing_shows_from_recent if s['t_id'] == t_id), None)
-                if prev_show_match:
-                    retry_queue.put((retry_task_counter, prev_show_match['state'], {'theaterId': t_id, 'theaterName': prev_show_match['theater']}))
-                    retry_task_counter += 1
-                    
-        total_retry_tasks = retry_queue.qsize()
-        retry_shows_data = []
-        retry_sold_out_queue = []
-        
-        try:
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_retry_tasks)) as executor:
-                # ✨ PASS HASH CACHE TO RETRY WORKER
-                futures = [executor.submit(process_theaters_worker, retry_queue, f"RETRY-{i+1}", total_retry_tasks, master_hash_cache) for i in range(min(MAX_WORKERS, total_retry_tasks))]
-                for future in as_completed(futures):
-                    try:
-                        result = future.result()
-                        retry_shows_data.extend(result["shows_data"])
-                        retry_sold_out_queue.extend(result["sold_out_queue"])
-                        
-                        # ✨ MERGE LEARNED HASHES (Retry Phase)
-                        if "hash_cache" in result:
-                            for h_key, h_data in result["hash_cache"].items():
-                                if h_key not in master_hash_cache:
-                                    master_hash_cache[h_key] = h_data
-                                    new_hash_entries[h_key] = h_data
-                    except Exception as e:
-                        print(f"❌ A retry thread encountered a fatal error: {e}")
-        except KeyboardInterrupt:
-            print("\n🛑 Retry Pipeline interrupted by user.")
-            
-        print("\n🔄 Integrating Retry Results...")
-        successful_retries = {}
-        for s in retry_shows_data:
-            if s.get('status') != "Available (Map Error)":
-                successful_retries[f"{s['t_id']}_{s['time']}"] = s
-                
-        fixed_map_errors = 0
-        recovered_missing = 0
-        
-        for show_key, retried_show in successful_retries.items():
-            existing_idx = next((i for i, s in enumerate(master_shows_data) if f"{s['t_id']}_{s['time']}" == show_key), -1)
-            
-            if existing_idx != -1:
-                existing_show = master_shows_data[existing_idx]
-                if existing_show.get('status') == "Available (Map Error)":
-                    t_id = existing_show['t_id']
-                    master_summary_data[t_id]['total'] += retried_show['total'] - existing_show['total']
-                    master_summary_data[t_id]['booked'] += retried_show['booked'] - existing_show['booked']
-                    master_summary_data[t_id]['gross'] += retried_show['gross'] - existing_show['gross']
-                    master_shows_data[existing_idx] = retried_show
-                    fixed_map_errors += 1
-                    print(f"   => 🛠️ FIXED Map Error via Retry: {retried_show['theater']} at {retried_show['time']}")
-                    
-                    log_to_remove = f"( {existing_show['state']} ) {existing_show['theater']} - {existing_show['time']}"
-                    master_ignored_shows_log = [log for log in master_ignored_shows_log if log_to_remove not in log]
-            else:
-                master_shows_data.append(retried_show)
-                t_id = retried_show['t_id']
-                if t_id not in master_summary_data:
-                    master_summary_data[t_id] = {'t_id': t_id, 'state': retried_show['state'], 'name': retried_show['theater'], 'shows': 0, 'total': 0, 'booked': 0, 'gross': 0.0}
-                master_summary_data[t_id]['shows'] += 1
-                master_summary_data[t_id]['total'] += retried_show['total']
-                master_summary_data[t_id]['booked'] += retried_show['booked']
-                master_summary_data[t_id]['gross'] += retried_show['gross']
-                recovered_missing += 1
-                print(f"   => 🟢 RECOVERED Missing Show via Retry: {retried_show['theater']} at {retried_show['time']}")
-                
-        for s in retry_sold_out_queue:
-            show_key = f"{s['t_id']}_{s['time']}"
-            existing_idx = next((i for i, ms in enumerate(master_shows_data) if f"{ms['t_id']}_{ms['time']}" == show_key), -1)
-            
-            if existing_idx != -1:
-                existing_show = master_shows_data[existing_idx]
-                if existing_show.get('status') == "Available (Map Error)":
-                    master_shows_data.pop(existing_idx)
-                    master_summary_data[s['t_id']]['shows'] -= 1
-                    log_to_remove = f"( {existing_show['state']} ) {existing_show['theater']} - {existing_show['time']}"
-                    master_ignored_shows_log = [log for log in master_ignored_shows_log if log_to_remove not in log]
-            
-            if not any(f"{mso['t_id']}_{mso['time']}" == show_key for mso in master_sold_out_queue):
-                master_sold_out_queue.append(s)
-                recovered_missing += 1
-                print(f"   => 🟢 RECOVERED Missing Show via Retry (Sold Out Queue): {s['theater']} at {s['time']}")
-                
-        still_missing = 0
-        for missing in missing_shows_from_recent:
-            show_key = f"{missing['t_id']}_{missing['time']}"
-            if show_key not in successful_retries and not any(f"{mso['t_id']}_{mso['time']}" == show_key for mso in master_sold_out_queue):
-                url_str = missing.get('seat_map_urls', '')
-                url_log = f" URL(s): {url_str}" if url_str else ""
-                
-                print(f"   => ❌ Missing show still missing after retry: {missing['theater']} at {missing['time']}. Ignoring.{url_log}")
-                fmt = missing.get('format', 'Standard')
-                state = missing.get('state', 'Unknown')
-                log_entry = f"( {state} ) {missing['theater']} - {missing['time']} [{fmt}] - This show was missing and failed retry.{url_log}"
-                master_ignored_shows_log.append(log_entry)
-                
-                still_missing += 1
-                
-        print(f"✅ Retry Phase Complete! Fixed {fixed_map_errors} Map Errors, Recovered {recovered_missing} Missing Shows. {still_missing} shows remain missing and ignored.")
-    else:
-        print("✅ No Map Errors or Missing Shows detected. Skipping Retry Phase.")
+                missing_shows_count += 1
+
+        print(
+            f"ℹ️ Comparison complete. "
+            f"{missing_shows_count} shows existed in previous run but are missing in current run."
+        )
 
     # =========================================================================
     # ── 4. QUEUE PROCESSING (Cross-Referencing) ──────────────────────────────
@@ -1122,7 +1011,7 @@ if __name__ == "__main__":
                     continue
 
                 # --- STANDARD MANUAL SHOW HANDLER ---
-                t_id = ms[1] if len(ms) > 1 else ""
+                t_id = str(ms[1]).strip().lower() if len(ms) > 1 else ""
                 time_str = ms[2] if len(ms) > 2 else ""
                 b_gross = float(ms[3]) if len(ms) > 3 and ms[3] is not None else 0.0
                 t_gross = float(ms[4]) if len(ms) > 4 and ms[4] is not None else 0.0
@@ -1137,7 +1026,7 @@ if __name__ == "__main__":
                 t_name = "Unknown Theater"
                 if st in master_map:
                     for t in master_map[st]:
-                        if t.get('theaterId') == t_id:
+                        if str(t.get('theaterId')).strip().lower() == t_id.lower() or t.get('theaterId') == t_id:
                             t_name = t.get('theaterName', 'Unknown')
                             break
                             
