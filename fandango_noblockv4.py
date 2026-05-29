@@ -58,11 +58,11 @@ OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front
 # Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
 # For EXTRA: ["EXTRA", "", "", Booked_Gross, 0, Booked_Tickets]
 MANUAL_SHOWS = [
-    ["EXTRA", "", "", 5300.0, 0, 175],
+    ["EXTRA", "", "",  9550.0, 0, 365],
     # Example of a fully detailed manual normal show:
     # ["CA", "AABCD", "7:00 PM", 1500.0, 3000.0, 75, 150, 0.50, "IMAX", "Telugu"]
-    ["IL", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Standard", "Telugu"],
-    ["IL", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Standard", "Telugu"],
+    # ["IL", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Standard", "Telugu"],
+    # ["IL", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Standard", "Telugu"],
 ]
 
 EXTRA_GROSS_NOTE = "Added extra gross for Apple cinemas and (Charlotte) Regal Stonecrest at Piper Glen - 6:30PM show which has been removed from Fandango"
