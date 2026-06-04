@@ -1146,7 +1146,7 @@ if __name__ == "__main__":
     # =========================================================================
     if CUMULATIVE_TRACKING_MODE and recent_shows_data:
         print(f"\n🛡️ Activating Cumulative Tracking Mode: Rescuing dropped shows and patching API errors...")
-        detailed_logger.info("Activating CUMULATIVE_TRACKING_MODE...")
+        print("Activating CUMULATIVE_TRACKING_MODE...")
         
         rescued_shows_count = 0
         protected_shows_count = 0
@@ -1188,7 +1188,7 @@ if __name__ == "__main__":
                 master_summary_data[prev_t_id]['gross'] += prev_show.get('gross', 0.0)
                 
                 rescued_shows_count += 1
-                detailed_logger.info(f"🛡️ RESCUED: {prev_show.get('theater')} at {prev_show.get('time')} - Maintained ${prev_show.get('gross', 0):.2f}")
+                print(f"🛡️ RESCUED: {prev_show.get('theater')} at {prev_show.get('time')} - Maintained ${prev_show.get('gross', 0):.2f}")
                 
             # --- SCENARIO B: The Show Exists, but LIVE data might be an API Crash ---
             else:
