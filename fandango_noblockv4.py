@@ -21,7 +21,7 @@ from firebase_admin import credentials, db
 MOVIE_ID = "244813" # Peddi
 MOVIE_TITLE = "Peddi"
 MOVIE_SLUG = "peddi-2026"
-SHOW_DATE = "2026-06-03"
+SHOW_DATE = "2026-06-04"
 
 MAPPING_FILE = "state_theatre_mapping.json"
 OVERWRITE_SNAPSHOT = os.getenv("OVERWRITE_SNAPSHOT", "false").lower() == "true" # ⚠️ Set to True to update the baseline after this run
@@ -49,8 +49,8 @@ MANUAL_MERGE_SHOWS_THEATRES = ["AAILI"]
 IGNORE_SOLDOUT_CHAINS = ["AMC"]
 
 # 🚨 FALLBACK & PRICING CONFIGURATION
-AVG_PRICE = 35.00
-MAX_TIER_PRICE = 41.00 #XD D-Box Pricing
+AVG_PRICE = 32.00
+MAX_TIER_PRICE = 32.00 #XD D-Box Pricing
 FALLBACK_SEATS = 100
 PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple of 5 (e.g., $29 -> $25)
 OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front row 'R' seats as blocks
@@ -59,11 +59,11 @@ OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front
 # Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
 # For EXTRA: ["EXTRA", "", "", Booked_Gross, 0, Booked_Tickets]
 MANUAL_SHOWS = [
-    ["EXTRA", "", "", 3300.0, 0, 115], #2000 extra blocked in venky, 1300 for AMC River east
+    #["EXTRA", "", "", 3300.0, 0, 115], #2000 extra blocked in venky, 1300 for AMC River east
     # Example of a fully detailed manual normal show:
     # ["Illinois", "AABCD", "7:00 PM", 1500.0, 3000.0, 75, 150, 0.50, "IMAX", "Telugu"]
-    ["New Jersey", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
-    ["New Jersey", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
+    #["New Jersey", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
+    #["New Jersey", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
 ]
 
 EXTRA_GROSS_NOTE = "Added extra gross for fans shows which are not added in fandano yet."
@@ -1213,7 +1213,7 @@ if __name__ == "__main__":
                     master_summary_data[prev_t_id]['gross'] += prev_show.get('gross', 0.0)
                     
                     protected_shows_count += 1
-                    detailed_logger.info(f"🛡️ PROTECTED: {prev_show.get('theater')} at {prev_show.get('time')}. Live was Map Error, reverted to previous valid state.")
+                    print(f"🛡️ PROTECTED: {prev_show.get('theater')} at {prev_show.get('time')}. Live was Map Error, reverted to previous valid state.")
                 
                 # If it's NOT an API crash, we do absolutely nothing.
                 # We strictly trust the live data, even if the gross goes down due to unblocked seats.
