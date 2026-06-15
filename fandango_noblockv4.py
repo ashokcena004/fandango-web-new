@@ -21,7 +21,7 @@ from firebase_admin import credentials, db
 MOVIE_ID = "244813" # Peddi
 MOVIE_TITLE = "Peddi"
 MOVIE_SLUG = "peddi-2026"
-SHOW_DATE = "2026-06-16"
+SHOW_DATE = "2026-06-15"
 
 MAPPING_FILE = "state_theatre_mapping.json"
 OVERWRITE_SNAPSHOT = os.getenv("OVERWRITE_SNAPSHOT", "false").lower() == "true" # ⚠️ Set to True to update the baseline after this run
