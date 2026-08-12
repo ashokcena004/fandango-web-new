@@ -30,6 +30,7 @@ URL = "https://www.fandango.com/spider-man-brand-new-day-2026-243819/movie-overv
 
 MAPPING_FILE = "state_theatre_mapping.json"
 OVERWRITE_SNAPSHOT = os.getenv("OVERWRITE_SNAPSHOT", "false").lower() == "true" # ⚠️ Set to True to update the baseline after this run
+CUMULATIVE_TRACKING_MODE = True
 
 SEAT_COUNT_MODE = 1
 # 1 = Use physical seat map count when available (more accurate but slower)
@@ -53,8 +54,8 @@ MANUAL_MERGE_SHOWS_THEATRES = ["AAILI"]
 IGNORE_SOLDOUT_CHAINS = ["AMC"]
 
 # 🚨 FALLBACK & PRICING CONFIGURATION
-AVG_PRICE = 35.00
-MAX_TIER_PRICE = 41.00 #XD D-Box Pricing
+AVG_PRICE = 32.00
+MAX_TIER_PRICE = 32.00 #XD D-Box Pricing
 FALLBACK_SEATS = 100
 PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple of 5 (e.g., $29 -> $25)
 OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front row 'R' seats as blocks
@@ -63,11 +64,11 @@ OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front
 # Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
 # For EXTRA: ["EXTRA", "", "", Booked_Gross, 0, Booked_Tickets]
 MANUAL_SHOWS = [
-    ["EXTRA", "", "", 3300.0, 0, 115], #2000 extra blocked in venky, 1300 for AMC River east
+    #["EXTRA", "", "", 3300.0, 0, 115], #2000 extra blocked in venky, 1300 for AMC River east
     # Example of a fully detailed manual normal show:
     # ["Illinois", "AABCD", "7:00 PM", 1500.0, 3000.0, 75, 150, 0.50, "IMAX", "Telugu"]
-    ["New Jersey", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
-    ["New Jersey", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
+    #["New Jersey", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
+    #["New Jersey", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
 ]
 
 EXTRA_GROSS_NOTE = "Added extra gross for fans shows which are not added in fandano yet."
@@ -1201,6 +1202,86 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️ Failed to generate run reports: {e}")
             traceback.print_exc()
+
+    # =========================================================================
+    # ── 4.8 CUMULATIVE TRACKING MODE (RESCUE PASSED SHOWS & PATCH ERRORS) ────
+    # =========================================================================
+    if CUMULATIVE_TRACKING_MODE and recent_shows_data:
+        print(f"\n🛡️ Activating Cumulative Tracking Mode: Rescuing dropped shows and patching API errors...")
+        print("Activating CUMULATIVE_TRACKING_MODE...")
+        
+        rescued_shows_count = 0
+        protected_shows_count = 0
+        
+        def clean_str(s):
+            return str(s).replace(" ", "").replace("\u202f", "").lower()
+            
+        # Create a dictionary of the CURRENT run for fast lookups
+        current_shows_dict = {}
+        for i, row in enumerate(master_shows_data):
+            # Unique key: TheaterID + Time + Format
+            key = f"{row.get('t_id')}_{clean_str(row.get('time'))}_{clean_str(row.get('format'))}"
+            current_shows_dict[key] = {'index': i, 'data': row}
+            
+        for prev_show in recent_shows_data:
+            # Skip manual EXTRA overrides and Manual Shows (they are freshly processed in 4.5 anyway)
+            if prev_show.get('is_extra') or prev_show.get('format') == "Fan Event / Manual": 
+                continue
+                
+            prev_t_id = prev_show.get('t_id')
+            prev_key = f"{prev_t_id}_{clean_str(prev_show.get('time'))}_{clean_str(prev_show.get('format'))}"
+            
+            # --- SCENARIO A: The Show Disappeared (Passed Time or Fandango dropped it) ---
+            if prev_key not in current_shows_dict:
+                # Rescue the show
+                master_shows_data.append(prev_show)
+                
+                # Safely patch it back into the master summary
+                if prev_t_id not in master_summary_data:
+                    master_summary_data[prev_t_id] = {
+                        't_id': prev_t_id, 'state': prev_show.get('state', 'Unknown'), 
+                        'name': prev_show.get('theater', 'Unknown'), 
+                        'shows': 0, 'total': 0, 'booked': 0, 'gross': 0.0
+                    }
+                
+                master_summary_data[prev_t_id]['shows'] += 1
+                master_summary_data[prev_t_id]['total'] += prev_show.get('total', 0)
+                master_summary_data[prev_t_id]['booked'] += prev_show.get('booked', 0)
+                master_summary_data[prev_t_id]['gross'] += prev_show.get('gross', 0.0)
+                
+                rescued_shows_count += 1
+                print(f"🛡️ RESCUED: {prev_show.get('theater')} at {prev_show.get('time')} - Maintained ${prev_show.get('gross', 0):.2f}")
+                
+            # --- SCENARIO B: The Show Exists, but LIVE data might be an API Crash ---
+            else:
+                curr_idx = current_shows_dict[prev_key]['index']
+                curr_show = current_shows_dict[prev_key]['data']
+                
+                # ✨ NEW LOGIC: Only overwrite if the live data explicitly crashed (Map Error)
+                is_api_crash = curr_show.get('status') == "Available (Map Error)"
+                
+                if is_api_crash:
+                    # 1. Deduct the current bad math from the summary
+                    master_summary_data[prev_t_id]['total'] -= curr_show.get('total', 0)
+                    master_summary_data[prev_t_id]['booked'] -= curr_show.get('booked', 0)
+                    master_summary_data[prev_t_id]['gross'] -= curr_show.get('gross', 0.0)
+                    
+                    # 2. Overwrite the array with the previous healthy run
+                    master_shows_data[curr_idx] = prev_show
+                    
+                    # 3. Add the good historical math back to the summary
+                    master_summary_data[prev_t_id]['total'] += prev_show.get('total', 0)
+                    master_summary_data[prev_t_id]['booked'] += prev_show.get('booked', 0)
+                    master_summary_data[prev_t_id]['gross'] += prev_show.get('gross', 0.0)
+                    
+                    protected_shows_count += 1
+                    print(f"🛡️ PROTECTED: {prev_show.get('theater')} at {prev_show.get('time')}. Live was Map Error, reverted to previous valid state.")
+                
+                # If it's NOT an API crash, we do absolutely nothing.
+                # We strictly trust the live data, even if the gross goes down due to unblocked seats.
+
+        print(f"   => ✅ Cumulative Tracking Complete: Rescued {rescued_shows_count} dropped shows. Patched {protected_shows_count} API errors.")
+
 
     # =========================================================================
     # ── 5. UPLOAD TO FIREBASE & MOMENTUM TRACKING ────────────────────────────
