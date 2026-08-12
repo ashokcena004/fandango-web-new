@@ -24,13 +24,18 @@ from utils.generateFandangoImageReport import generate_fandango_image_report
 # =============================================================================
 
 SHOW_DATE = "2026-08-13"
-
 URL = "https://www.fandango.com/vishwanath-and-sons-2026-246791/movie-overview"
 
+# 🚨 FALLBACK & PRICING CONFIGURATION
+AVG_PRICE = 20.00
+MAX_TIER_PRICE = 20.00 #XD D-Box Pricing
+FALLBACK_SEATS = 100
+PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple of 5 (e.g., $29 -> $25)
+OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front row 'R' seats as blocks
 
 MAPPING_FILE = "state_theatre_mapping.json"
 OVERWRITE_SNAPSHOT = os.getenv("OVERWRITE_SNAPSHOT", "false").lower() == "true" # ⚠️ Set to True to update the baseline after this run
-CUMULATIVE_TRACKING_MODE = True
+CUMULATIVE_TRACKING_MODE = False
 
 SEAT_COUNT_MODE = 1
 # 1 = Use physical seat map count when available (more accurate but slower)
@@ -51,14 +56,7 @@ MANUAL_MERGE_SHOWS_THEATRES = ["AAILI"]
 
 # 🚫 IGNORE SOLD OUT SHOWS FOR SPECIFIC CHAINS
 # If a show at these chains is "Sold Out", its tickets and gross will be zeroed out.
-IGNORE_SOLDOUT_CHAINS = ["AMC"]
-
-# 🚨 FALLBACK & PRICING CONFIGURATION
-AVG_PRICE = 32.00
-MAX_TIER_PRICE = 32.00 #XD D-Box Pricing
-FALLBACK_SEATS = 100
-PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple of 5 (e.g., $29 -> $25)
-OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front row 'R' seats as blocks
+IGNORE_SOLDOUT_CHAINS = [] #Eg: AMC
 
 # 📝 MANUAL SHOWS OVERRIDE (Fan Shows / Missing API Data)
 # Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
