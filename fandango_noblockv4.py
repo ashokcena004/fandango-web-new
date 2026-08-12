@@ -23,9 +23,9 @@ from utils.generateFandangoImageReport import generate_fandango_image_report
 # ── 1. CONFIGURATION ─────────────────────────────────────────────────────────
 # =============================================================================
 
-SHOW_DATE = "2026-06-03"
+SHOW_DATE = "2026-08-13"
 
-URL = "https://www.fandango.com/spider-man-brand-new-day-2026-243819/movie-overview"
+URL = "https://www.fandango.com/vishwanath-and-sons-2026-246791/movie-overview"
 
 
 MAPPING_FILE = "state_theatre_mapping.json"
