@@ -5,6 +5,7 @@ import os
 import traceback
 import logging
 import queue
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 import random
@@ -14,14 +15,18 @@ load_dotenv()
 import firebase_admin
 from firebase_admin import credentials, db
 
+from utils.generateFandangoExcelReport import export_master_excel
+from utils.generateFandangoHTMLReport import generate_fandango_html_report
+from utils.generateFandangoImageReport import generate_fandango_image_report
+
 # =============================================================================
 # ── 1. CONFIGURATION ─────────────────────────────────────────────────────────
 # =============================================================================
 
-MOVIE_ID = "244813" # Peddi
-MOVIE_TITLE = "Peddi"
-MOVIE_SLUG = "peddi-2026"
 SHOW_DATE = "2026-06-03"
+
+URL = "https://www.fandango.com/spider-man-brand-new-day-2026-243819/movie-overview"
+
 
 MAPPING_FILE = "state_theatre_mapping.json"
 OVERWRITE_SNAPSHOT = os.getenv("OVERWRITE_SNAPSHOT", "false").lower() == "true" # ⚠️ Set to True to update the baseline after this run
@@ -66,6 +71,12 @@ MANUAL_SHOWS = [
 ]
 
 EXTRA_GROSS_NOTE = "Added extra gross for fans shows which are not added in fandano yet."
+
+# Extra Movie Details
+movie_part = URL.split("/")[-2]
+MOVIE_ID = re.search(r"-(\d+)$", movie_part).group(1)
+MOVIE_SLUG = re.sub(r"-\d+$", "", movie_part)
+MOVIE_TITLE = MOVIE_SLUG.replace("-", " ").title()
 
 # 🚀 MULTI-THREADING CONFIGURATION
 MAX_WORKERS = 5  # Optimal balance between speed and Akamai bot-detection
@@ -736,6 +747,46 @@ def process_theaters_worker(task_queue, thread_id, total_tasks, master_hash_cach
         "hash_cache": local_hash_cache # ✨ NEW
     }
 
+
+def generate_run_reports(master_shows_data, previous_shows_data, last_updated_str):
+    os.makedirs("reports", exist_ok=True)
+
+    base_filename = os.path.join("reports", f"{MOVIE_SLUG}_{SHOW_DATE}")
+
+    excel_path = export_master_excel(
+        master_shows_data,
+        base_filename,
+        previous_shows_data=previous_shows_data,
+        last_updated_str=last_updated_str
+    )
+
+    html_path = generate_fandango_html_report(
+        master_shows_data,
+        f"{base_filename}.html",
+        movie_name=MOVIE_TITLE,
+        show_date=SHOW_DATE,
+        previous_shows_data=previous_shows_data,
+        last_updated_str=last_updated_str,
+        country_name=""
+    )
+
+    image_path = generate_fandango_image_report(
+        master_shows_data,
+        f"{base_filename}.png",
+        movie_name=MOVIE_TITLE,
+        show_date=SHOW_DATE,
+        previous_shows_data=previous_shows_data,
+        last_updated_str=last_updated_str,
+        country_name=""
+    )
+
+    print(f"📁 Generated run artifacts:\n  - Excel: {excel_path}\n  - HTML: {html_path}\n  - Image: {image_path}")
+    return {
+        "excel": excel_path,
+        "html": html_path,
+        "image": image_path,
+    }
+
 # =============================================================================
 # ── MAIN EXECUTION ───────────────────────────────────────────────────────────
 # =============================================================================
@@ -1139,6 +1190,17 @@ if __name__ == "__main__":
                     show['gross'] = 0.0
                     show['price_str'] = "$0.00"
                     show['status'] = "Sold Out (Ignored)"
+
+    # =========================================================================
+    # ── 4.8 SAVE REPORT ARTIFACTS (GitHub Actions Downloadable, Not Committed) ─
+    # =========================================================================
+    generated_reports = {}
+    if master_shows_data:
+        try:
+            generated_reports = generate_run_reports(master_shows_data, previous_shows_data, last_updated_str)
+        except Exception as e:
+            print(f"⚠️ Failed to generate run reports: {e}")
+            traceback.print_exc()
 
     # =========================================================================
     # ── 5. UPLOAD TO FIREBASE & MOMENTUM TRACKING ────────────────────────────

@@ -2,3 +2,4 @@ logs/
 reports/
 .env
 git_token.txt
+__pycache__/
