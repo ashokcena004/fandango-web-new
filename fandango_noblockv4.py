@@ -23,7 +23,7 @@ from utils.generateFandangoImageReport import generate_fandango_image_report
 # ── 1. CONFIGURATION ─────────────────────────────────────────────────────────
 # =============================================================================
 
-SHOW_DATE = "2026-08-13"
+SHOW_DATE = "2026-08-14"
 URL = "https://www.fandango.com/vishwanath-and-sons-2026-246791/movie-overview"
 
 # 🚨 FALLBACK & PRICING CONFIGURATION
