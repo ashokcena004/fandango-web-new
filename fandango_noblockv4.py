@@ -23,15 +23,29 @@ from utils.generateFandangoImageReport import generate_fandango_image_report
 # ── 1. CONFIGURATION ─────────────────────────────────────────────────────────
 # =============================================================================
 
-SHOW_DATE = "2026-08-14"
-URL = "https://www.fandango.com/vishwanath-and-sons-2026-246791/movie-overview"
+SHOW_DATE = "2026-08-25"
+URL = "https://www.fandango.com/toxic-a-fairytale-for-grownups-2026-244612/movie-overview"
 
 # 🚨 FALLBACK & PRICING CONFIGURATION
 AVG_PRICE = 20.00
-MAX_TIER_PRICE = 20.00 #XD D-Box Pricing
+MAX_TIER_PRICE = 25.00 #XD D-Box Pricing
 FALLBACK_SEATS = 100
 PRICE_TAX_CUT = False  # If True, rounds ticket prices down to nearest multiple of 5 (e.g., $29 -> $25)
 OCC_THRESHOLD_FRONTROW = 0.50  # If overall occupancy is below this, treat front row 'R' seats as blocks
+
+
+# 📝 MANUAL SHOWS OVERRIDE (Fan Shows / Missing API Data)
+# Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
+# For EXTRA: ["EXTRA", "", "", Booked_Gross, 0, Booked_Tickets]
+MANUAL_SHOWS = [
+    #["EXTRA", "", "", 3300.0, 0, 115], #2000 extra blocked in venky, 1300 for AMC River east
+    # Example of a fully detailed manual normal show:
+    # ["Illinois", "AABCD", "7:00 PM", 1500.0, 3000.0, 75, 150, 0.50, "IMAX", "Telugu"]
+    #["New Jersey", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
+    #["New Jersey", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
+]
+
+EXTRA_GROSS_NOTE = "Added extra gross for fans shows which are not added in fandano yet."
 
 MAPPING_FILE = "state_theatre_mapping.json"
 OVERWRITE_SNAPSHOT = os.getenv("OVERWRITE_SNAPSHOT", "false").lower() == "true" # ⚠️ Set to True to update the baseline after this run
@@ -41,7 +55,7 @@ SEAT_COUNT_MODE = 1
 # 1 = Use physical seat map count when available (more accurate but slower)
 # 2 = Use cached summary data from API (faster but may be less accurate in some cases)
 
-# 🎯 SCREEN EXCLUSION CONFIGURATION
+# 🎯 PHYSICAL SCREEN EXCLUSION CONFIGURATION
 # Format: "TheaterID_AuditoriumID"
 PREFER_CACHED_SCREENS = [
     "9E1KKd3a_10", # Cinemark Merriam and XD - Aud 10
@@ -57,19 +71,6 @@ MANUAL_MERGE_SHOWS_THEATRES = ["AAILI"]
 # 🚫 IGNORE SOLD OUT SHOWS FOR SPECIFIC CHAINS
 # If a show at these chains is "Sold Out", its tickets and gross will be zeroed out.
 IGNORE_SOLDOUT_CHAINS = [] #Eg: AMC
-
-# 📝 MANUAL SHOWS OVERRIDE (Fan Shows / Missing API Data)
-# Format: ["State", "Theater_ID", "Showtime", Booked_Gross, Total_Gross, Booked_Tickets, Total_Tickets, Occupancy_Percentage, Format (Optional), Language (Optional)]
-# For EXTRA: ["EXTRA", "", "", Booked_Gross, 0, Booked_Tickets]
-MANUAL_SHOWS = [
-    #["EXTRA", "", "", 3300.0, 0, 115], #2000 extra blocked in venky, 1300 for AMC River east
-    # Example of a fully detailed manual normal show:
-    # ["Illinois", "AABCD", "7:00 PM", 1500.0, 3000.0, 75, 150, 0.50, "IMAX", "Telugu"]
-    #["New Jersey", "AAEMI", "6:20 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
-    #["New Jersey", "AAEMI", "6:35 PM", 3125.0, 3125.0, 125, 125, 1.0, "Manual", "Telugu"],
-]
-
-EXTRA_GROSS_NOTE = "Added extra gross for fans shows which are not added in fandano yet."
 
 # Extra Movie Details
 movie_part = URL.split("/")[-2]
